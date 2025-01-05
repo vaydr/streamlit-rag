@@ -256,22 +256,49 @@ function highlightFilter(filter) {
 <style>
   #flexContainer {
     display: flex !important;
-    flex-wrap: nowrap !important;
     width: 100%;
     height: 100vh;
-    margin: 0;
+    margin: 0; 
     padding: 0;
     box-sizing: border-box;
     overflow: hidden; 
   }
   #leftPane {
     flex: 1 1 auto;
-    overflow: hidden;
     border-right: 1px solid #ccc;
+    position: relative; /* container for overlay */
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  #mynetwork {
+    flex: 1 1 auto;
     position: relative;
+    border: none !important;
+  }
+  #lassoOverlay {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none; /* toggled to 'auto' if lasso is ON */
+    cursor: crosshair;
+  }
+  #toolbar {
+    background: #eee;
+    padding: 8px;
+  }
+  #statusBox {
+    margin-top: 5px;
+    background: #fff;
+    border: 1px solid #ccc;
+    width: 95%;
+    height: 60px;
+    resize: vertical;
+    overflow: auto;
   }
   #rightPane {
-    width: 550px;
+    width: 400px;
     min-width: 300px;
     box-sizing: border-box;
     background: #f5f5f5;
@@ -280,25 +307,22 @@ function highlightFilter(filter) {
     overflow: auto;
   }
   #config {
-    width: 100% !important; 
-    box-sizing: border-box !important; 
-    float: none !important; 
-  }
-  #mynetwork {
-    border: none !important;
+    width: 100% !important;
+    float: none !important;
+    box-sizing: border-box !important;
   }
 </style>
 
 <div id="flexContainer">
-  <div id="leftPane">
-    <div id="mynetwork" class="card-body"></div>
-  </div>
+  
+<div id="leftPane">
+  <div id="mynetwork" class="card-body"></div>
+</div>
+
   <div id="rightPane">
     <div id="config"></div>
   </div>
 </div>
-
-<!-- re-inject all PyVis scripts below -->
 <script>function neighbourhoodHighlight(params) {
   // console.log("in nieghbourhoodhighlight");
   allNodes = nodes.get({ returnType: "Object" });
@@ -590,6 +614,226 @@ function highlightFilter(filter) {
               }
               drawGraph();
         </script>
+
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    var net = window.network;
+    var container = document.getElementById('mynetwork');
+
+    // Insert overlay canvas for lasso lines
+    var overlay = document.createElement('canvas');
+    overlay.id = "lassoOverlay";
+    container.appendChild(overlay);
+
+    // Insert toolbar + status box
+    var toolbar = document.createElement('div');
+    toolbar.id = "toolbar";
+    toolbar.innerHTML = `
+      <div style="margin-bottom:5px;">
+        <input type="checkbox" id="lassoCheckbox"/>
+        <label for="lassoCheckbox"> Lasso Mode (freeze canvas)</label>
+      </div>
+      <div>
+        <input type="text" id="questionInput" placeholder="Ask a question..." style="width:60%;"/>
+        <button id="submitButton">Submit</button>
+      </div>
+      <div id="statusBox"></div>
+    `;
+    var leftPane = document.getElementById("leftPane");
+    leftPane.appendChild(toolbar);
+
+    var ctx = overlay.getContext('2d');
+    var lassoCheckbox = document.getElementById("lassoCheckbox");
+    var questionInput = document.getElementById("questionInput");
+    var submitButton = document.getElementById("submitButton");
+    var statusBox = document.getElementById("statusBox");
+
+    var isDrawing = false;
+    var lassoPoints = [];
+    var selectedNodeIDs = [];
+    // We'll store previously gold-highlighted nodes to revert them when next question
+    var oldGoldNodes = [];
+
+    // Save default drag/zoom
+    var defaultDragView = net.interactionHandler.options.dragView;
+    var defaultZoomView = net.interactionHandler.options.zoomView;
+    var defaultDragNodes = net.interactionHandler.options.dragNodes;
+
+    // Resizing overlay
+    function resizeOverlay() {
+      let rect = container.getBoundingClientRect();
+      overlay.width = rect.width;
+      overlay.height = rect.height;
+    }
+    resizeOverlay();
+    window.addEventListener('resize', resizeOverlay);
+
+    function logStatus(msg) {
+      statusBox.innerHTML += msg + "<br/>";
+      statusBox.scrollTop = statusBox.scrollHeight;
+    }
+
+    // Lasso checkbox toggles
+    lassoCheckbox.addEventListener("change", function(){
+      let lassoOn = this.checked;
+      if(lassoOn) {
+        net.interactionHandler.options.dragView = false;
+        net.interactionHandler.options.zoomView = false;
+        net.interactionHandler.options.dragNodes = false;
+        overlay.style.pointerEvents = "auto";
+        logStatus("Lasso: ON");
+      } else {
+        net.interactionHandler.options.dragView = defaultDragView;
+        net.interactionHandler.options.zoomView = defaultZoomView;
+        net.interactionHandler.options.dragNodes = defaultDragNodes;
+        overlay.style.pointerEvents = "none";
+        logStatus("Lasso: OFF");
+      }
+    });
+
+    // MOUSEDOWN => start capturing
+    overlay.addEventListener("mousedown", function(e){
+      if(lassoCheckbox.checked) {
+        isDrawing = true;
+        lassoPoints = [ getLocalPos(e) ];
+        clearOverlay();
+      }
+    });
+
+    // MOUSEMOVE => draw lines
+    overlay.addEventListener("mousemove", function(e){
+      if(isDrawing && lassoCheckbox.checked) {
+        lassoPoints.push(getLocalPos(e));
+        drawPolygon(lassoPoints, false);
+      }
+    });
+
+    // MOUSEUP => finalize
+    overlay.addEventListener("mouseup", function(e){
+      if(isDrawing && lassoCheckbox.checked){
+        isDrawing = false;
+        drawPolygon(lassoPoints, true);
+
+        // Revert old selected nodes to normal
+        if(selectedNodeIDs.length > 0) {
+          revertNodesToDefault(selectedNodeIDs);
+        }
+
+        // Now find new selection
+        let nodeIDs = net.body.data.nodes.getIds();
+        let newlySelected = [];
+        for(let nid of nodeIDs) {
+          let posObj = net.getPositions(nid);
+          let domPos = net.canvasToDOM(posObj[nid]);
+          let overlayPos = getOverlayCoords(domPos.x, domPos.y);
+          if(isInsidePolygon(overlayPos.x, overlayPos.y, lassoPoints)){
+            newlySelected.push(nid);
+          }
+        }
+        selectedNodeIDs = newlySelected;
+
+        // highlight them w/ borderWidth=5
+        highlightNodes(newlySelected, 5, null);
+
+        logStatus("New lasso selection: "+newlySelected.join(", "));
+        lassoPoints = [];
+        clearOverlay();
+      }
+    });
+
+    // On "Submit," revert old gold, highlight new subset in gold
+    submitButton.addEventListener("click", function(){
+      let question = questionInput.value.trim();
+      if(!question) return;
+
+      // revert old gold back to normal
+      revertNodesToDefault(oldGoldNodes);
+      oldGoldNodes = [];
+
+      let msg = `Response to question "${question}" on selected [${selectedNodeIDs.join(", ")}]`;
+      logStatus(msg);
+
+      // for demonstration: gold highlight half
+      let half = Math.floor(selectedNodeIDs.length/2);
+      let subset = selectedNodeIDs.slice(0, half);
+
+      // highlight w/ gold border => ignoring the old borderWidth
+      highlightNodes(subset, null, "gold");
+      oldGoldNodes = subset.slice(); // store them to revert later
+    });
+
+
+    // ~~~~~~~~~~~~~ HELPER FUNCS ~~~~~~~~~~~~~
+
+    function highlightNodes(nodeIDs, borderWidthVal, borderColorVal){
+      let updates = [];
+      for(let nid of nodeIDs){
+        let obj = {id:nid};
+        if(borderWidthVal!==null) obj.borderWidth = borderWidthVal;
+        if(borderColorVal!==null) obj.color = {border: borderColorVal};
+        updates.push(obj);
+      }
+      net.body.data.nodes.update(updates);
+    }
+
+    // revert to default (borderWidth=1, border color=undefined -> old color)
+    function revertNodesToDefault(nodeIDs){
+      let updates=[];
+      for(let nid of nodeIDs){
+        updates.push({
+          id:nid,
+          borderWidth:1,
+          color: { border: undefined }
+        });
+      }
+      net.body.data.nodes.update(updates);
+    }
+
+    function clearOverlay(){
+      ctx.clearRect(0,0,overlay.width,overlay.height);
+    }
+
+    function drawPolygon(points, close){
+      clearOverlay();
+      ctx.beginPath();
+      if(points.length>0){
+        ctx.moveTo(points[0].x, points[0].y);
+        for(let i=1; i<points.length; i++){
+          ctx.lineTo(points[i].x, points[i].y);
+        }
+        if(close) ctx.closePath();
+      }
+      ctx.strokeStyle="rgba(255,0,0,0.7)";
+      ctx.lineWidth=2;
+      ctx.stroke();
+    }
+
+    function getLocalPos(e){
+      let rect = overlay.getBoundingClientRect();
+      return { x:e.clientX-rect.left, y:e.clientY-rect.top };
+    }
+
+    // net.canvasToDOM => doc coords
+    // We want overlay coords => subtract container rect
+    function getOverlayCoords(domX, domY){
+      let rect = container.getBoundingClientRect();
+      return {x: domX-rect.left, y:domY-rect.top};
+    }
+
+    // ray-casting
+    function isInsidePolygon(px,py, poly){
+      let inside=false;
+      for(let i=0, j=poly.length-1; i<poly.length; j=i++){
+        let xi=poly[i].x, yi=poly[i].y;
+        let xj=poly[j].x, yj=poly[j].y;
+        let inter=((yi>py)!=(yj>py)) && (px<(xj-xi)*(py-yi)/(yj-yi)+xi);
+        if(inter) inside=!inside;
+      }
+      return inside;
+    }
+});
+</script>
+
 </body>
 
 </html>
