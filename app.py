@@ -9,8 +9,6 @@ import seaborn as sns
 from networkx.algorithms import community as nx_community
 import community.community_louvain as community_louvain
 
-
-
 def create_graph_from_csv(df, node1_col, edge_col, node2_col):
     """
     Given a DataFrame and the names of the columns that correspond 
@@ -483,7 +481,6 @@ def main():
             with open(html_path, 'r', encoding='utf-8') as f:
                 html_code = f.read()
             st.components.v1.html(html_code, height=1000, scrolling=True)
-
 
 if __name__ == "__main__":
     main()
