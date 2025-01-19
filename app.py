@@ -451,19 +451,62 @@ document.addEventListener("DOMContentLoaded", function() {{
 
     return output_html
 
+
 def main():
     st.title("Visual Knowledge Graph Question-Answering")
-    st.write("Upload a CSV with **at least 3 columns** and map them to node_1, edge, node_2.")
+    st.write("Upload a CSV or a TXT file with at least 3 columns/triplets.")
 
-    uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
+    # 1) Let the user upload either CSV or TXT
+    uploaded_file = st.file_uploader("Upload CSV or TXT", type=["csv","txt"])
     if uploaded_file is not None:
-        df = pd.read_csv(uploaded_file)
-        st.write("### CSV Preview")
+        # 2) Check extension or attempt to parse
+        #    If it's CSV, do your current logic
+        #    If it's TXT, parse each line as "n1|edge|n2"
+        import io
+        
+        file_name = uploaded_file.name.lower()
+        if file_name.endswith(".csv"):
+            # Normal CSV parse
+            df = pd.read_csv(uploaded_file)
+        else:
+            # Assume it's .txt
+            raw_text = uploaded_file.read().decode("utf-8", errors="replace")
+            lines = raw_text.splitlines()
+            
+            rows = []
+            for line in lines:
+                # Split by '|'
+                parts = line.split('|')
+                if len(parts) < 3:
+                    # If line is malformed, skip or handle gracefully
+                    continue
+                # e.g. "n1 | edge | n2"
+                node1 = parts[0].strip()
+                edge = parts[1].strip()
+                node2 = parts[2].strip()
+                rows.append([node1, edge, node2])
+            
+            df = pd.DataFrame(rows, columns=["node_1","edge","node_2"])
+
+        # 3) Let the user optionally limit how many rows (lines) to keep
+        st.write("#### Optional: Number of lines to keep (for debug):")
+        num_lines = st.text_input("(Leave blank or zero to keep all)", value="")
+        
+        # Attempt to parse num_lines into an int
+        try:
+            n_val = int(num_lines)
+            if n_val > 0:
+                df = df.iloc[:n_val].copy()  # keep only the first n_val rows
+        except ValueError:
+            pass  # if invalid or blank, we do nothing
+
+        # 4) Show preview
+        st.write("### Data Preview")
         st.dataframe(df.head())
 
         columns = list(df.columns)
         if len(columns) < 3:
-            st.warning("Please upload a CSV with at least 3 columns.")
+            st.warning("Please upload a file with at least 3 columns or triplet lines.")
             return  # stop here
 
         st.write("#### Select which columns correspond to each field:")
