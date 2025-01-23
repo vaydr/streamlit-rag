@@ -22,12 +22,7 @@ def create_graph_from_csv(df, node1_col, edge_col, node2_col):
         edge_label = str(row[edge_col]).strip()
         G.add_node(node1)
         G.add_node(node2)
-        # Store the relationship in 'title' so PyVis can display it on hover (if needed)
         G.add_edge(node1, node2, title=edge_label)
-    return G
-
-def color_communities_girvan_newman(G):
-    # (Omitted actual coloring logic for brevity)
     return G
 
 def color_communities_louvain(G):
@@ -46,7 +41,7 @@ def color_communities_louvain(G):
 
 def draw_graph_reset(G, output_html="graph_reset.html"):
     """
-    1) Renders a PyVis network with repulsion ~300 iterations,
+    1) Renders a PyVis network with repulsion ~500 iterations,
     2) Freezes physics,
     3) Injects question input in same HTML,
     4) BFS on random nodes -> highlight in BLUE,
